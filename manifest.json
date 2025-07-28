@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Alternate Tab",
+  "version": "1.0.0",
+  "description": "Switch to the previously active tab with a keyboard shortcut",
+  "author": "Developer",
+  "homepage_url": "https://github.com/your-username/alternate-tab",
+  "permissions": [
+    "tabs",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "commands": {
+    "switch-to-previous-tab": {
+      "suggested_key": {
+        "default": "Alt+Q",
+        "mac": "Alt+Q",
+        "chromeos": "Alt+Q",
+        "linux": "Alt+Q"
+      },
+      "description": "Switch to the previously active tab"
+    }
+  }
+}
