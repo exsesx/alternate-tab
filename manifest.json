@@ -3,8 +3,8 @@
   "name": "Alternate Tab",
   "version": "1.0.0",
   "description": "Switch to the previously active tab with a keyboard shortcut",
-  "author": "Developer",
-  "homepage_url": "https://github.com/your-username/alternate-tab",
+  "author": "exsesx",
+  "homepage_url": "https://github.com/exsesx/alternate-tab",
   "permissions": [
     "tabs",
     "storage"
