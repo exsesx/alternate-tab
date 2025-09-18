@@ -1,4 +1,3 @@
-
 const CONFIG = {
   DEBUG: false,
   MAX_HISTORY_SIZE: 10,
@@ -63,27 +62,67 @@ const TabHistoryManager = {
   }
 };
 
-async function isTabValid(tabId) {
-  try {
-    await chrome.tabs.get(tabId);
-
-    return true;
-  } catch (error) {
-
-    return false;
-  }
-}
-
 /**
- * Cleans invalid tabs from history in parallel.
+ * Cleans invalid tabs and non-normal windows from history in parallel.
  * @param {Array<object>} tabsHistory 
  * @returns {Promise<Array<object>>}
  */
 async function getCleanedHistory(tabsHistory) {
-  const validityChecks = tabsHistory.map(tab => isTabValid(tab.tabId));
-  const results = await Promise.all(validityChecks);
+  const historyChecks = tabsHistory.map(async (entry) => {
+    try {
+      const tab = await chrome.tabs.get(entry.tabId);
+      const window = await chrome.windows.get(tab.windowId);
 
-  return tabsHistory.filter((_, index) => results[index]);
+      if (window.type !== 'normal') {
+
+        return null;
+      }
+
+      return { tabId: tab.id, windowId: tab.windowId };
+    } catch (error) {
+
+      return null;
+    }
+  });
+
+  const cleanedEntries = await Promise.all(historyChecks);
+
+  return cleanedEntries.filter(Boolean);
+}
+
+async function findNextValidTarget(tabsHistory) {
+  let needsCleanup = false;
+
+  for (let index = 1; index < tabsHistory.length; index += 1) {
+    const entry = tabsHistory[index];
+
+    try {
+      const tab = await chrome.tabs.get(entry.tabId);
+      const window = await chrome.windows.get(tab.windowId);
+
+      if (window.type !== 'normal') {
+        needsCleanup = true;
+
+        continue;
+      }
+
+      if (tab.windowId !== entry.windowId) {
+        needsCleanup = true;
+      }
+
+      return {
+        tabInfo: {
+          tabId: tab.id,
+          windowId: tab.windowId,
+        },
+        needsCleanup,
+      };
+    } catch (error) {
+      needsCleanup = true;
+    }
+  }
+
+  return { tabInfo: null, needsCleanup };
 }
 
 async function handleTabActivated(tabInfo) {
@@ -91,15 +130,37 @@ async function handleTabActivated(tabInfo) {
     console.log('Tab activated:', tabInfo.tabId);
   }
 
-  await TabHistoryManager.modify(async (currentHistory) => {
-    const newHistory = currentHistory.filter(
-      historyTab => historyTab.tabId !== tabInfo.tabId
-    );
+  try {
+    const tab = await chrome.tabs.get(tabInfo.tabId);
+    const window = await chrome.windows.get(tab.windowId);
 
-    newHistory.unshift(tabInfo);
+    if (window.type !== 'normal') {
+      if (CONFIG.DEBUG) {
+        console.log('Skipping non-normal window:', window.type);
+      }
 
-    return newHistory;
-  });
+      return;
+    }
+
+    const normalizedInfo = {
+      tabId: tab.id,
+      windowId: tab.windowId,
+    };
+
+    await TabHistoryManager.modify(async (currentHistory) => {
+      const newHistory = currentHistory.filter(
+        historyTab => historyTab.tabId !== normalizedInfo.tabId
+      );
+
+      newHistory.unshift(normalizedInfo);
+
+      return newHistory;
+    });
+  } catch (error) {
+    if (CONFIG.DEBUG) {
+      console.log('Failed to handle tab activation:', error);
+    }
+  }
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -151,25 +212,33 @@ chrome.commands.onCommand.addListener(async (command) => {
       return;
     }
 
-    const targetTabInfo = tabsHistory[1];
+    const { tabInfo: targetTabInfo, needsCleanup } = await findNextValidTarget(tabsHistory);
 
-    if (await isTabValid(targetTabInfo.tabId)) {
-      const currentWindow = await chrome.windows.getCurrent();
-
-      if (targetTabInfo.windowId !== currentWindow.id) {
-        await chrome.windows.update(targetTabInfo.windowId, { focused: true });
-      }
-
-      await chrome.tabs.update(targetTabInfo.tabId, { active: true });
-
+    if (!targetTabInfo) {
       if (CONFIG.DEBUG) {
-        console.log('Switched to tab:', targetTabInfo.tabId);
-      }
-    } else {
-      if (CONFIG.DEBUG) {
-        console.log('Target tab no longer exists, cleaning history.');
+        console.log('No valid tab to switch to, skipping.');
       }
 
+      if (needsCleanup) {
+        TabHistoryManager.modify(getCleanedHistory);
+      }
+
+      return;
+    }
+
+    const currentWindow = await chrome.windows.getCurrent();
+
+    if (targetTabInfo.windowId !== currentWindow.id) {
+      await chrome.windows.update(targetTabInfo.windowId, { focused: true });
+    }
+
+    await chrome.tabs.update(targetTabInfo.tabId, { active: true });
+
+    if (CONFIG.DEBUG) {
+      console.log('Switched to tab:', targetTabInfo.tabId);
+    }
+
+    if (needsCleanup) {
       TabHistoryManager.modify(getCleanedHistory);
     }
   } catch (error) {
@@ -199,4 +268,3 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     console.error('Error on window focus change:', error);
   }
 });
-
