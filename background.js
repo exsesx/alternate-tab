@@ -4,6 +4,14 @@ const CONFIG = {
   STORAGE_KEY: 'tabsHistory',
 };
 
+const WINDOW_TYPES = {
+  NORMAL: 'normal',
+};
+
+function isPrimaryWindowType(windowType) {
+  return windowType === WINDOW_TYPES.NORMAL;
+}
+
 /**
  * Manages tab history state and ensures atomic updates to storage
  * to prevent race conditions.
@@ -63,7 +71,7 @@ const TabHistoryManager = {
 };
 
 /**
- * Cleans invalid tabs and non-normal windows from history in parallel.
+ * Cleans invalid tabs and unsupported windows from history in parallel.
  * @param {Array<object>} tabsHistory 
  * @returns {Promise<Array<object>>}
  */
@@ -73,14 +81,16 @@ async function getCleanedHistory(tabsHistory) {
       const tab = await chrome.tabs.get(entry.tabId);
       const window = await chrome.windows.get(tab.windowId);
 
-      if (window.type !== 'normal') {
-
+      if (!isPrimaryWindowType(window.type)) {
         return null;
       }
 
-      return { tabId: tab.id, windowId: tab.windowId };
+      return {
+        tabId: tab.id,
+        windowId: tab.windowId,
+        windowType: window.type,
+      };
     } catch (error) {
-
       return null;
     }
   });
@@ -100,13 +110,17 @@ async function findNextValidTarget(tabsHistory) {
       const tab = await chrome.tabs.get(entry.tabId);
       const window = await chrome.windows.get(tab.windowId);
 
-      if (window.type !== 'normal') {
+      if (!isPrimaryWindowType(window.type)) {
         needsCleanup = true;
 
         continue;
       }
 
-      if (tab.windowId !== entry.windowId) {
+      const entryWindowType = entry.windowType;
+      const windowIdChanged = tab.windowId !== entry.windowId;
+      const windowTypeChanged = entryWindowType && entryWindowType !== window.type;
+
+      if (windowIdChanged || windowTypeChanged) {
         needsCleanup = true;
       }
 
@@ -114,6 +128,7 @@ async function findNextValidTarget(tabsHistory) {
         tabInfo: {
           tabId: tab.id,
           windowId: tab.windowId,
+          windowType: window.type,
         },
         needsCleanup,
       };
@@ -134,9 +149,9 @@ async function handleTabActivated(tabInfo) {
     const tab = await chrome.tabs.get(tabInfo.tabId);
     const window = await chrome.windows.get(tab.windowId);
 
-    if (window.type !== 'normal') {
+    if (!isPrimaryWindowType(window.type)) {
       if (CONFIG.DEBUG) {
-        console.log('Skipping non-normal window:', window.type);
+        console.log('Skipping unsupported window type:', window.type);
       }
 
       return;
@@ -145,6 +160,7 @@ async function handleTabActivated(tabInfo) {
     const normalizedInfo = {
       tabId: tab.id,
       windowId: tab.windowId,
+      windowType: window.type,
     };
 
     await TabHistoryManager.modify(async (currentHistory) => {
@@ -172,8 +188,24 @@ chrome.runtime.onInstalled.addListener(async () => {
     const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
     if (currentTab) {
-      const initialHistory = [{ tabId: currentTab.id, windowId: currentTab.windowId }];
-      await TabHistoryManager.modify(() => Promise.resolve(initialHistory));
+      try {
+        const currentWindow = await chrome.windows.get(currentTab.windowId);
+        if (!isPrimaryWindowType(currentWindow.type)) {
+          return;
+        }
+
+        const initialHistory = [{
+          tabId: currentTab.id,
+          windowId: currentTab.windowId,
+          windowType: currentWindow.type,
+        }];
+
+        await TabHistoryManager.modify(() => Promise.resolve(initialHistory));
+      } catch (error) {
+        if (CONFIG.DEBUG) {
+          console.log('Failed to seed initial history:', error);
+        }
+      }
     }
   } catch (error) {
     console.error('Error during extension installation:', error);
