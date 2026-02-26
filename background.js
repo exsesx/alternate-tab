@@ -8,6 +8,8 @@ const WINDOW_TYPES = {
   NORMAL: 'normal',
 };
 
+const HISTORY_STORAGE = chrome.storage.session;
+
 function isPrimaryWindowType(windowType) {
   return windowType === WINDOW_TYPES.NORMAL;
 }
@@ -39,7 +41,7 @@ const TabHistoryManager = {
 
   async _get() {
     try {
-      const result = await chrome.storage.local.get(CONFIG.STORAGE_KEY);
+      const result = await HISTORY_STORAGE.get(CONFIG.STORAGE_KEY);
 
       return result[CONFIG.STORAGE_KEY] || [];
     } catch (error) {
@@ -53,7 +55,7 @@ const TabHistoryManager = {
     try {
       const trimmedHistory = tabsHistory.slice(0, CONFIG.MAX_HISTORY_SIZE);
 
-      await chrome.storage.local.set({ [CONFIG.STORAGE_KEY]: trimmedHistory });
+      await HISTORY_STORAGE.set({ [CONFIG.STORAGE_KEY]: trimmedHistory });
 
       if (CONFIG.DEBUG) {
         console.log('Tab history updated:', trimmedHistory);
@@ -69,6 +71,61 @@ const TabHistoryManager = {
     return this._get();
   }
 };
+
+async function getSeedHistory() {
+  const activeTabs = await chrome.tabs.query({
+    active: true,
+    windowType: WINDOW_TYPES.NORMAL,
+  });
+
+  const normalizedHistory = activeTabs
+    .filter(tab => tab.id !== undefined && tab.windowId !== undefined)
+    .map(tab => ({
+      tabId: tab.id,
+      windowId: tab.windowId,
+      windowType: WINDOW_TYPES.NORMAL,
+    }));
+
+  if (!normalizedHistory.length) {
+    return normalizedHistory;
+  }
+
+  try {
+    const lastFocusedWindow = await chrome.windows.getLastFocused();
+
+    if (!isPrimaryWindowType(lastFocusedWindow.type)) {
+      return normalizedHistory;
+    }
+
+    normalizedHistory.sort((entryA, entryB) => {
+      if (entryA.windowId === lastFocusedWindow.id) {
+        return -1;
+      }
+
+      if (entryB.windowId === lastFocusedWindow.id) {
+        return 1;
+      }
+
+      return 0;
+    });
+  } catch (error) {
+    if (CONFIG.DEBUG) {
+      console.log('Failed to prioritize focused window while seeding:', error);
+    }
+  }
+
+  return normalizedHistory;
+}
+
+async function reseedHistoryFromActiveTabs() {
+  try {
+    const seedHistory = await getSeedHistory();
+
+    await TabHistoryManager.modify(() => Promise.resolve(seedHistory));
+  } catch (error) {
+    console.error('Error reseeding tab history:', error);
+  }
+}
 
 /**
  * Cleans invalid tabs and unsupported windows from history in parallel.
@@ -179,37 +236,24 @@ async function handleTabActivated(tabInfo) {
   }
 }
 
-chrome.runtime.onInstalled.addListener(async () => {
+chrome.runtime.onInstalled.addListener(async (details) => {
   if (CONFIG.DEBUG) {
     console.log('Extension installed');
   }
 
-  try {
-    const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-    if (currentTab) {
-      try {
-        const currentWindow = await chrome.windows.get(currentTab.windowId);
-        if (!isPrimaryWindowType(currentWindow.type)) {
-          return;
-        }
-
-        const initialHistory = [{
-          tabId: currentTab.id,
-          windowId: currentTab.windowId,
-          windowType: currentWindow.type,
-        }];
-
-        await TabHistoryManager.modify(() => Promise.resolve(initialHistory));
-      } catch (error) {
-        if (CONFIG.DEBUG) {
-          console.log('Failed to seed initial history:', error);
-        }
-      }
+  if (details.reason !== 'install') {
+    if (CONFIG.DEBUG) {
+      console.log('Skipping history seed for non-install reason:', details.reason);
     }
-  } catch (error) {
-    console.error('Error during extension installation:', error);
+
+    return;
   }
+
+  await reseedHistoryFromActiveTabs();
+});
+
+chrome.runtime.onStartup.addListener(async () => {
+  await reseedHistoryFromActiveTabs();
 });
 
 chrome.tabs.onActivated.addListener(handleTabActivated);
