@@ -1,6 +1,6 @@
 # Alternate Tab
 
-A modern Chrome extension that allows you to quickly switch between your current tab and the previously active tab with a keyboard shortcut.
+A Chrome extension that switches between your current tab and the previously active tab, including tabs in other windows.
 
 ## Features
 
@@ -22,7 +22,11 @@ A modern Chrome extension that allows you to quickly switch between your current
 ## Usage
 
 ### Default Shortcut
-Press **Alt+Q** to switch between your current tab and the previously active tab.
+Press **Alt+Q** or click the pinned extension toolbar button to switch to the previously active tab. Press again to switch back.
+
+Only tabs in normal browser windows enter history. Activity in background windows, popup windows, DevTools, and Picture-in-Picture does not replace your last visited tab. The PiP source tab remains eligible as an ordinary tab. Switching leaves PiP playback alone. If Chrome delivers the shortcut while PiP is focused, switching uses the last focused normal window.
+
+A target in another window brings that window forward, restoring it if minimized.
 
 ### Customizing the Shortcut
 1. Go to `chrome://extensions/shortcuts/`
@@ -30,43 +34,19 @@ Press **Alt+Q** to switch between your current tab and the previously active tab
 3. Click the pencil icon next to "Switch to the previously active tab"
 4. Set your preferred keyboard shortcut
 
-## Advanced: Using Ctrl+Tab (Developer Hack)
+## How it works
 
-Chrome normally restricts `Ctrl+Tab` as a keyboard shortcut, but you can enable it using the developer console:
+The extension records the active tab in the focused normal browser window. Each shortcut or toolbar click checks the current tab and selects the most recently visited different tab. Complete operations run sequentially so rapid presses cannot read the same unfinished switch.
 
-1. Find your extension ID:
-   - Go to `chrome://extensions/`
-   - Enable "Developer mode" 
-   - Copy the extension ID (long string under the extension name)
+History contains up to 10 tab IDs in Chrome session storage. It survives service-worker suspension but does not reuse stale IDs across browser sessions. After an extension reload or browser restart, history is seeded from Chrome's `lastAccessed` values. This is a best-effort starting order; subsequent visits establish the exact order.
 
-2. Open Chrome DevTools (F12) on any page
-3. Go to the Console tab
-4. Run this command (replace `YOUR_EXTENSION_ID` with your actual extension ID):
+While the worker is awake, it keeps history in memory and saves snapshots to session storage in order, without making the next press wait for a write. Repeated same-window switches use the last verified window snapshot and call tab activation without any preceding browser reads. External tab activations, window-focus changes, closures, replacements, and moves invalidate that snapshot. A worker restart reloads the latest saved history and checks the live window again.
 
-```javascript
-await chrome.developerPrivate.updateExtensionCommand({
-    extensionId: "YOUR_EXTENSION_ID",
-    commandName: "switch-to-previous-tab",
-    keybinding: "Ctrl+Tab"
-});
-```
-
-**Note**: This hack uses Chrome's internal developer API and may not work in all Chrome versions. Use at your own discretion.
-
-## How It Works
-
-The extension maintains a history of recently active tabs in Chrome's local storage. When you activate a tab, it moves to the front of the history. When you use the keyboard shortcut, it switches to the second tab in the history (your previous tab).
-
-### Key Components
-
-- **Tab History Management**: Tracks tab activation and maintains a clean history
-- **Cross-Window Support**: Handles focus changes between Chrome windows
-- **Automatic Cleanup**: Removes closed tabs from history to prevent errors
-- **Race Condition Prevention**: Uses semaphores to handle rapid tab operations
+Closed tabs and unsupported windows are skipped. Moved tabs use their current window, and Chrome tab replacements retain their history position.
 
 ## Browser Compatibility
 
-- **Chrome**: Fully supported (Manifest V3)
+- **Chrome**: Version 121 or newer (Manifest V3)
 - **Chromium-based browsers**: Should work (Brave, Edge, etc.)
 - **Other browsers**: Not supported (uses Chrome Extension APIs)
 
@@ -75,7 +55,7 @@ The extension maintains a history of recently active tabs in Chrome's local stor
 The extension is built with:
 - **Manifest V3**: Modern Chrome extension format
 - **Service Worker**: Background script that conserves resources
-- **Chrome Storage API**: Persistent tab history storage
+- **Chrome Storage API**: Session tab history storage
 - **Chrome Tabs API**: Tab management and switching
 
 ### Project Structure
@@ -83,15 +63,26 @@ The extension is built with:
 ```
 ├── manifest.json       # Extension configuration
 ├── background.js       # Main extension logic
+├── tests/background.test.cjs # Chrome API event regression tests
 └── README.md          # This file
 ```
+
+### Verification
+
+Run the regression suite with Node.js 18 or newer, without installing dependencies:
+
+```sh
+node --test tests/background.test.cjs
+```
+
+The tests execute the real background script with simulated Chrome APIs. For a browser smoke test, reload the extension at `chrome://extensions/`, visit two tabs, and alternate repeatedly with both the shortcut and toolbar button. Repeat across two windows, with a minimized destination, and with PiP open. Browser shortcut delivery and native PiP behavior require this live check.
 
 ## Troubleshooting
 
 ### Extension Not Working
-1. Check that the extension is enabled in `chrome://extensions/`
+1. Check that the extension is enabled in `chrome://extensions/`. After updating these files, click its Reload button and confirm version 1.1.2.
 2. Verify the keyboard shortcut is set in `chrome://extensions/shortcuts/`
-3. Make sure you have at least 2 tabs open with history
+3. Visit at least two tabs in normal browser windows
 
 ### Shortcut Not Responding
 1. Try a different keyboard shortcut in case of conflicts

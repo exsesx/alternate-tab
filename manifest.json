@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Alternate Tab",
-  "version": "1.0.0",
+  "version": "1.1.2",
+  "minimum_chrome_version": "121",
   "description": "Switch to the previously active tab with a keyboard shortcut",
   "author": "exsesx",
   "homepage_url": "https://github.com/exsesx/alternate-tab",
@@ -12,6 +13,9 @@
   "background": {
     "service_worker": "background.js",
     "type": "module"
+  },
+  "action": {
+    "default_title": "Switch to the previously active tab"
   },
   "commands": {
     "switch-to-previous-tab": {
